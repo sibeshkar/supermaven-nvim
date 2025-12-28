@@ -123,3 +123,97 @@ export function buildStreamingTextItem(text: string): ResponseItem {
 export function buildEndItem(): ResponseItem {
   return { kind: "end" };
 }
+
+// ============================================================================
+// Streaming Postprocessor
+// ============================================================================
+
+// Opening fence pattern: ```lang\n or ```\n at the start (newline required)
+const OPENING_FENCE_PATTERN = /^```\w*\n/;
+
+// Closing fence pattern: ``` at the end (with optional newline before)
+const CLOSING_FENCE_PATTERN = /\n?```\s*$/;
+
+/**
+ * Streaming postprocessor that handles markdown code fences
+ * that arrive in chunks during streaming.
+ *
+ * The challenge: When streaming, we might receive:
+ *   chunk1: "\`\`\`py"
+ *   chunk2: "thon\ndef"
+ *   chunk3: " foo():\n"
+ *   ...
+ *   chunkN: "\n\`\`\`"
+ *
+ * This class buffers initial content to detect/strip opening fences,
+ * and watches for closing fences at the end.
+ */
+export class StreamingPostprocessor {
+  private buffer: string = "";
+  private openingStripped: boolean = false;
+  private readonly maxBufferSize: number = 50;
+
+  /**
+   * Process an incoming chunk and return the text to emit (if any).
+   * May return empty string if buffering.
+   */
+  process(chunk: string): string {
+    this.buffer += chunk;
+
+    // If we haven't stripped the opening fence yet, check if we have enough
+    if (!this.openingStripped) {
+      // Look for opening fence pattern (requires newline to be complete)
+      const match = this.buffer.match(OPENING_FENCE_PATTERN);
+      if (match) {
+        // Found complete opening fence, strip it
+        this.buffer = this.buffer.slice(match[0].length);
+        this.openingStripped = true;
+      } else if (this.buffer.length >= this.maxBufferSize) {
+        // Buffer full, no opening fence found - just pass through
+        this.openingStripped = true;
+      } else if (!this.buffer.startsWith("`")) {
+        // Doesn't start with backtick, no fence coming
+        this.openingStripped = true;
+      } else if (this.buffer.includes("\n") && !this.buffer.match(/^```\w*\n/)) {
+        // Has a newline but doesn't match fence pattern - not a fence
+        this.openingStripped = true;
+      } else {
+        // Still buffering, waiting for newline to complete potential fence
+        return "";
+      }
+    }
+
+    // Return buffered content, keeping potential closing fence chars
+    // We keep the last few chars in case closing fence spans chunks
+    const keepChars = 4; // Length of "\n```"
+    if (this.buffer.length <= keepChars) {
+      return "";
+    }
+
+    const toEmit = this.buffer.slice(0, -keepChars);
+    this.buffer = this.buffer.slice(-keepChars);
+    return toEmit;
+  }
+
+  /**
+   * Flush remaining buffer, stripping any closing fence.
+   * Call this when the stream ends.
+   */
+  flush(): string {
+    let result = this.buffer;
+    this.buffer = "";
+
+    // Strip closing fence if present
+    result = result.replace(CLOSING_FENCE_PATTERN, "");
+
+    return result;
+  }
+
+  /**
+   * Reset the processor state.
+   */
+  reset(): void {
+    this.buffer = "";
+    this.openingStripped = false;
+  }
+}

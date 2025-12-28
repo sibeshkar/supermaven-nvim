@@ -7,6 +7,7 @@ import {
   buildResponseItems,
   buildStreamingTextItem,
   buildEndItem,
+  StreamingPostprocessor,
 } from "../../src/postprocess";
 
 describe("Completion Post-processing", () => {
@@ -199,6 +200,102 @@ describe("Completion Post-processing", () => {
     test("creates end item", () => {
       const item = buildEndItem();
       expect(item).toEqual({ kind: "end" });
+    });
+  });
+
+  describe("StreamingPostprocessor", () => {
+    test("strips opening fence from single chunk", () => {
+      const processor = new StreamingPostprocessor();
+      // Simulate receiving complete fenced code
+      const result1 = processor.process("```python\nreturn x");
+      const result2 = processor.process(" + y\n```");
+      const final = processor.flush();
+      
+      const combined = result1 + result2 + final;
+      expect(combined).toBe("return x + y");
+    });
+
+    test("strips opening fence split across chunks", () => {
+      const processor = new StreamingPostprocessor();
+      const r1 = processor.process("```");
+      const r2 = processor.process("python\n");
+      const r3 = processor.process("return 42");
+      const final = processor.flush();
+      
+      const combined = r1 + r2 + r3 + final;
+      expect(combined).toBe("return 42");
+    });
+
+    test("strips closing fence", () => {
+      const processor = new StreamingPostprocessor();
+      const r1 = processor.process("```py\n");
+      const r2 = processor.process("code here");
+      const r3 = processor.process("\n```");
+      const final = processor.flush();
+      
+      const combined = r1 + r2 + r3 + final;
+      expect(combined).toBe("code here");
+    });
+
+    test("passes through content without fences", () => {
+      const processor = new StreamingPostprocessor();
+      const r1 = processor.process("return ");
+      const r2 = processor.process("x + y");
+      const final = processor.flush();
+      
+      const combined = r1 + r2 + final;
+      expect(combined).toBe("return x + y");
+    });
+
+    test("handles empty chunks", () => {
+      const processor = new StreamingPostprocessor();
+      const r1 = processor.process("");
+      const r2 = processor.process("hello");
+      const r3 = processor.process("");
+      const final = processor.flush();
+      
+      const combined = r1 + r2 + r3 + final;
+      expect(combined).toBe("hello");
+    });
+
+    test("reset clears state", () => {
+      const processor = new StreamingPostprocessor();
+      processor.process("```python\n");
+      processor.reset();
+      
+      // After reset, should treat new input fresh
+      const r1 = processor.process("plain text");
+      const final = processor.flush();
+      
+      expect(r1 + final).toBe("plain text");
+    });
+
+    test("handles fence with language specifier", () => {
+      const processor = new StreamingPostprocessor();
+      const r1 = processor.process("```typescript\nconst x = 1;");
+      const r2 = processor.process("\n```");
+      const final = processor.flush();
+      
+      expect(r1 + r2 + final).toBe("const x = 1;");
+    });
+
+    test("handles fence without language specifier", () => {
+      const processor = new StreamingPostprocessor();
+      const r1 = processor.process("```\ncode");
+      const r2 = processor.process("\n```");
+      const final = processor.flush();
+      
+      expect(r1 + r2 + final).toBe("code");
+    });
+
+    test("preserves internal newlines", () => {
+      const processor = new StreamingPostprocessor();
+      const r1 = processor.process("```py\nline1\n");
+      const r2 = processor.process("line2\nline3");
+      const r3 = processor.process("\n```");
+      const final = processor.flush();
+      
+      expect(r1 + r2 + r3 + final).toBe("line1\nline2\nline3");
     });
   });
 });

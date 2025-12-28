@@ -7,13 +7,12 @@
 import { parseIncomingMessage, formatOutgoingMessage } from "./protocol";
 import { extractContext } from "./context";
 import { createBackend } from "./backend";
-import { buildStreamingTextItem, buildEndItem } from "./postprocess";
+import { buildStreamingTextItem, buildEndItem, StreamingPostprocessor } from "./postprocess";
 import { CONFIG, getBackendConfig } from "./config";
 import type {
   IncomingMessage,
   StateUpdateMessage,
   OutgoingMessage,
-  ResponseItem,
 } from "./types";
 
 // Track pending requests for cancellation
@@ -81,26 +80,37 @@ async function handleStateUpdate(msg: StateUpdateMessage): Promise<void> {
       return;
     }
 
-    // Stream completion
-    const items: ResponseItem[] = [];
+    // Stream completion with postprocessing to strip markdown fences
+    const postprocessor = new StreamingPostprocessor();
 
     for await (const chunk of backend.streamComplete(context, controller.signal)) {
       if (controller.signal.aborted) {
         break;
       }
 
-      // Send partial response
-      send({
-        kind: "response",
-        stateId,
-        items: [buildStreamingTextItem(chunk)],
-      });
-
-      items.push(buildStreamingTextItem(chunk));
+      // Process chunk through postprocessor (strips markdown fences)
+      const processed = postprocessor.process(chunk);
+      if (processed) {
+        send({
+          kind: "response",
+          stateId,
+          items: [buildStreamingTextItem(processed)],
+        });
+      }
     }
 
-    // Send end marker
+    // Flush any remaining buffered content
     if (!controller.signal.aborted) {
+      const remaining = postprocessor.flush();
+      if (remaining) {
+        send({
+          kind: "response",
+          stateId,
+          items: [buildStreamingTextItem(remaining)],
+        });
+      }
+
+      // Send end marker
       send({
         kind: "response",
         stateId,
