@@ -1,0 +1,19 @@
+{
+  "name": "sm-agent-local",
+  "version": "0.1.0",
+  "description": "Drop-in replacement for sm-agent using local LLMs",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "build": "bun build src/index.ts --compile --outfile sm-agent",
+    "test": "bun test tests/unit tests/integration",
+    "test:live": "bun test tests/live",
+    "test:all": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.0.0"
+  }
+}
