@@ -80,8 +80,8 @@ async function handleStateUpdate(msg: StateUpdateMessage): Promise<void> {
       return;
     }
 
-    // Stream completion with postprocessing to strip markdown fences
-    const postprocessor = new StreamingPostprocessor();
+    // Stream completion with postprocessing to strip markdown fences and duplicate prefix
+    const postprocessor = new StreamingPostprocessor(context.prefix);
 
     for await (const chunk of backend.streamComplete(context, controller.signal)) {
       if (controller.signal.aborted) {

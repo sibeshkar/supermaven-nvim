@@ -135,8 +135,9 @@ const OPENING_FENCE_PATTERN = /^```\w*\n/;
 const CLOSING_FENCE_PATTERN = /\n?```\s*$/;
 
 /**
- * Streaming postprocessor that handles markdown code fences
- * that arrive in chunks during streaming.
+ * Streaming postprocessor that handles:
+ * 1. Markdown code fences that arrive in chunks during streaming
+ * 2. Duplicate prefix stripping (when LLM echoes back part of the context)
  *
  * The challenge: When streaming, we might receive:
  *   chunk1: "\`\`\`py"
@@ -145,13 +146,33 @@ const CLOSING_FENCE_PATTERN = /\n?```\s*$/;
  *   ...
  *   chunkN: "\n\`\`\`"
  *
- * This class buffers initial content to detect/strip opening fences,
- * and watches for closing fences at the end.
+ * And the LLM might echo back the prefix:
+ *   prefix ends with: "def multiply(x, y):\n    "
+ *   LLM returns: "def multiply(x, y):\n    return x * y"
+ *   We want: "return x * y"
+ *
+ * This class buffers initial content to detect/strip opening fences
+ * and duplicate prefixes, and watches for closing fences at the end.
  */
 export class StreamingPostprocessor {
   private buffer: string = "";
   private openingStripped: boolean = false;
+  private prefixStripped: boolean = false;
   private readonly maxBufferSize: number = 50;
+  private readonly prefixEnd: string;
+  private readonly maxPrefixCheckSize: number = 150;
+
+  /**
+   * Create a streaming postprocessor.
+   * @param prefix - Optional prefix text (last ~100 chars before cursor).
+   *                 If provided, will strip any overlap at the start of output.
+   */
+  constructor(prefix?: string) {
+    // Keep the last 100 chars of prefix for overlap detection
+    this.prefixEnd = prefix ? prefix.slice(-100) : "";
+    // If no prefix, mark as already stripped
+    this.prefixStripped = !this.prefixEnd;
+  }
 
   /**
    * Process an incoming chunk and return the text to emit (if any).
@@ -183,6 +204,19 @@ export class StreamingPostprocessor {
       }
     }
 
+    // If we haven't stripped the duplicate prefix yet, check for overlap
+    if (!this.prefixStripped) {
+      // Buffer enough content to detect overlap (up to prefixEnd length + some margin)
+      if (this.buffer.length < this.maxPrefixCheckSize && this.buffer.length < this.prefixEnd.length) {
+        // Keep buffering to accumulate enough for overlap detection
+        return "";
+      }
+
+      // Now check for overlap between prefixEnd and buffer start
+      this.buffer = this.stripOverlap(this.buffer, this.prefixEnd);
+      this.prefixStripped = true;
+    }
+
     // Return buffered content, keeping potential closing fence chars
     // We keep the last few chars in case closing fence spans chunks
     const keepChars = 4; // Length of "\n```"
@@ -200,6 +234,12 @@ export class StreamingPostprocessor {
    * Call this when the stream ends.
    */
   flush(): string {
+    // If we never got enough content to check prefix, do it now
+    if (!this.prefixStripped && this.prefixEnd) {
+      this.buffer = this.stripOverlap(this.buffer, this.prefixEnd);
+      this.prefixStripped = true;
+    }
+
     let result = this.buffer;
     this.buffer = "";
 
@@ -215,5 +255,35 @@ export class StreamingPostprocessor {
   reset(): void {
     this.buffer = "";
     this.openingStripped = false;
+    this.prefixStripped = !this.prefixEnd;
+  }
+
+  /**
+   * Strip overlap between completion start and prefix end.
+   * If the completion starts with text that matches the end of the prefix,
+   * remove that overlapping portion.
+   *
+   * Example:
+   *   prefixEnd: "def multiply(x, y):\n    "
+   *   completion: "def multiply(x, y):\n    return x * y"
+   *   result: "return x * y"
+   */
+  private stripOverlap(completion: string, prefixEnd: string): string {
+    if (!completion || !prefixEnd) return completion;
+
+    // Find overlap: check if prefixEnd's tail matches completion's head
+    // We try from longest possible overlap down to 1 char
+    const maxOverlap = Math.min(prefixEnd.length, completion.length);
+
+    for (let i = maxOverlap; i > 0; i--) {
+      const prefixTail = prefixEnd.slice(-i);
+      const completionHead = completion.slice(0, i);
+
+      if (prefixTail === completionHead) {
+        return completion.slice(i);
+      }
+    }
+
+    return completion;
   }
 }

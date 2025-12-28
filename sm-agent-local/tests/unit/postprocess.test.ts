@@ -297,5 +297,139 @@ describe("Completion Post-processing", () => {
       
       expect(r1 + r2 + r3 + final).toBe("line1\nline2\nline3");
     });
+
+    // Prefix stripping tests
+    describe("with prefix stripping", () => {
+      test("strips duplicate prefix from streaming output", () => {
+        const prefix = "def multiply(x, y):\n    ";
+        const processor = new StreamingPostprocessor(prefix);
+        
+        // LLM echoes back the function signature
+        const r1 = processor.process("def multiply(x, y):\n    ");
+        const r2 = processor.process("return x * y");
+        const final = processor.flush();
+        
+        expect(r1 + r2 + final).toBe("return x * y");
+      });
+
+      test("strips partial overlap at end of prefix", () => {
+        const prefix = "def foo():\n    ";
+        const processor = new StreamingPostprocessor(prefix);
+        
+        // LLM only echoes the indentation
+        const r1 = processor.process("    return 42");
+        const final = processor.flush();
+        
+        expect(r1 + final).toBe("return 42");
+      });
+
+      test("handles no overlap with prefix", () => {
+        const prefix = "def foo():";
+        const processor = new StreamingPostprocessor(prefix);
+        
+        // LLM returns clean completion
+        const r1 = processor.process("return 42");
+        const final = processor.flush();
+        
+        expect(r1 + final).toBe("return 42");
+      });
+
+      test("strips prefix overlap split across chunks", () => {
+        const prefix = "const x = ";
+        const processor = new StreamingPostprocessor(prefix);
+        
+        // Overlap comes in multiple chunks
+        const r1 = processor.process("const ");
+        const r2 = processor.process("x = ");
+        const r3 = processor.process("42");
+        const final = processor.flush();
+        
+        expect(r1 + r2 + r3 + final).toBe("42");
+      });
+
+      test("strips both fence and prefix overlap", () => {
+        const prefix = "def add(x, y):\n    ";
+        const processor = new StreamingPostprocessor(prefix);
+        
+        // LLM returns fenced code with prefix overlap
+        const r1 = processor.process("```python\n    return x + y\n```");
+        const final = processor.flush();
+        
+        expect(r1 + final).toBe("return x + y");
+      });
+
+      test("handles long prefix - only uses last 100 chars", () => {
+        // Create a long prefix
+        const longCode = "x = 1\n".repeat(50);
+        const prefix = longCode + "def foo():\n    ";
+        const processor = new StreamingPostprocessor(prefix);
+        
+        // LLM echoes just the recent part
+        const r1 = processor.process("def foo():\n    return 42");
+        const final = processor.flush();
+        
+        expect(r1 + final).toBe("return 42");
+      });
+
+      test("preserves content when prefix is empty", () => {
+        const processor = new StreamingPostprocessor("");
+        
+        const r1 = processor.process("return 42");
+        const final = processor.flush();
+        
+        expect(r1 + final).toBe("return 42");
+      });
+
+      test("preserves content when no prefix provided", () => {
+        const processor = new StreamingPostprocessor();
+        
+        const r1 = processor.process("return 42");
+        const final = processor.flush();
+        
+        expect(r1 + final).toBe("return 42");
+      });
+
+      test("handles multiline overlap", () => {
+        const prefix = "class Foo:\n    def __init__(self):\n        ";
+        const processor = new StreamingPostprocessor(prefix);
+        
+        // LLM echoes the method signature
+        const r1 = processor.process("def __init__(self):\n        self.x = 1");
+        const final = processor.flush();
+        
+        expect(r1 + final).toBe("self.x = 1");
+      });
+
+      test("reset clears prefix stripping state", () => {
+        const prefix = "    ";
+        const processor = new StreamingPostprocessor(prefix);
+        
+        // First use - should strip
+        processor.process("    hello");
+        processor.flush();
+        
+        // Reset
+        processor.reset();
+        
+        // After reset, should strip again
+        const r1 = processor.process("    world");
+        const final = processor.flush();
+        
+        expect(r1 + final).toBe("world");
+      });
+
+      test("strips prefix in flush when stream is short", () => {
+        const prefix = "return ";
+        const processor = new StreamingPostprocessor(prefix);
+        
+        // Very short stream - all content fits in buffer
+        const r1 = processor.process("return 42");
+        // r1 will be empty because we're still buffering
+        const final = processor.flush();
+        
+        // Should still strip the overlap
+        expect(r1 + final).toBe("42");
+      });
+    });
   });
 });
