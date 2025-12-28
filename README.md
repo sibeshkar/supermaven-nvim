@@ -2,6 +2,18 @@
 
 This plugin, supermaven-nvim, lets you use [Supermaven](https://supermaven.com/) in Neovim. If you encounter any issues while using supermaven-nvim, consider opening an issue or reaching out to us on [Discord](https://discord.com/invite/QQpqBmQH3w).
 
+## Build 
+```
+```
+```
+```
+cd sm-agent-local && bun build ./src/index.ts --compile --outfile sm-agent
+cp sm-agent ~/.supermaven/binary/v20/macosx-aarch64/
+```
+```
+```
+```
+
 ## Installation
 
 Using a plugin manager, run the .setup({}) function in your Neovim configuration file.
